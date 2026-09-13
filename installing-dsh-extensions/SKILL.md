@@ -194,24 +194,19 @@ cd ~/projects/MyAI/dsh-extensions/vendor/<repo>
 grep -rhoE 'from "[^.][^"]*"' lib/*.js | sort -u
 ```
 
-如果其中有 `@deepseek-ai/*`，把它们指到安装闭包（版本随生产 harness 走，且共享模块实例）：
+修法（按优先级）：
 
-```bash
-cd ~/projects/MyAI/dsh-extensions/vendor/<repo>
-for p in $(python3 -c "import json;d=json.load(open('package.json'));ks=set(d.get('peerDependencies',{}))|set(d.get('dependencies',{}));print(' '.join(k for k in ks if k.startswith('@deepseek-ai/')))"); do
-  [ -e "$HOME/.dsh/profiles/node_modules/$p" ] || continue
-  rm -rf "node_modules/$p"
-  mkdir -p "$(dirname "node_modules/$p")"
-  ln -sfn "$HOME/.dsh/profiles/node_modules/$p" "node_modules/$p"
-  echo "linked $p"
-done
-```
+1. **把 `lib/` 里出现的 `@deepseek-ai/*` 声明进 `dependencies`**（推荐，`pnpm install --prod` 也能重建）。版本对齐生产 harness，例如 `"@deepseek-ai/dsh-llm": "^0.1.5-rc.2"`。
+2. 同时把 `devDependencies` 里对应包对齐到**同一生产版本**：`pnpm install`（完整安装）必须能产出可解析的运行时，否则重建时又回到坑里。注意 npm 上部分 `dsh-client-*` 包停在旧版本（如 `dsh-client-runtime` 只有 0.1.1-rc.2），client 包以**实际可得的最近版本**为准，只用于类型/构建，不进运行时。
+3. 不要手工把 vendor `node_modules/@deepseek-ai/*` 软链到 `~/.dsh/profiles/node_modules`：`pnpm install` 会覆盖，实例/版本又随 profile heal 漂移，无法从 git 重建（已弃用）。
 
-`pnpm install --prod` 实测会保留这些外来软链；链完再重启（见 A6）。判断插件的 import 是否全部可解析，不必起服务：
+判断插件的 import 是否全部可解析，不必起服务：
 
 ```bash
 cd ~/.dsh/profiles/web && node --input-type=module -e "await import('<包名>'); console.log('import OK')"
 ```
+
+版本上跳（如 0.1.1 → 0.1.5）时，client 插件要额外核对：服务改名（例：`conversationEvents` → `uiConversation.events`）、slot 名与 owner props、`dsh.client.inject` 的模块行是否存在、以及服务端事件形状（例：系统提示词从 `request/header` 移到 `system/message`）。推荐流程：`pnpm typecheck` 定位类型漂移 → `pnpm test` → `pnpm build` → 无头浏览器开一次页面看 `Failed to load plugins` 横幅与插件控件。
 
 ### A6. 重启（见下方「重启规则」）
 
@@ -438,7 +433,7 @@ systemd-run --user --collect --on-active=10 --unit=dsh-restart-once systemctl --
 | `ERR_PNPM_IGNORED_BUILDS` | 依赖带 postinstall 被 pnpm 拦下。按报错点名的**确切键**加进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`，再重跑 |
 | lockfile 漂移报错 | 加 `--no-frozen-lockfile` |
 | 重启后 `plugin tree failed to load`、页面打不开 | 新插件没激活（多半 bundles 缺项，或它自己的 `cordis.patch.yml` 有语法错）。**别让它留在崩溃循环里**：先 `journalctl --user -u dsh-web -n 60` 看报错，改完再重启 |
-| `Cannot find package '@deepseek-ai/…' imported from …/vendor/…` | 两种原因：① 检出被改名/移动过，vendor 里的绝对符号链接悬空——`find ~/projects/MyAI/dsh-extensions -xtype l` 排查后重指；② 插件 externalize 了 `@deepseek-ai/*`，但 vendor 里没有可解析副本（`pnpm install` 什么都没装，或只装了 devDeps 的旧版本）。修法见 A5「运行时依赖必须能解析」，链好再重启 |
+| `Cannot find package '@deepseek-ai/…' imported from …/vendor/…` | 两种原因：① 检出被改名/移动过，vendor 里的绝对符号链接悬空——`find ~/projects/MyAI/dsh-extensions -xtype l` 排查后重指；② 插件 externalize 了 `@deepseek-ai/*`，但 vendor 的 `node_modules` 里没有可解析副本（没装依赖，或 devDeps 还是旧版本）。修法见 A5「运行时依赖必须能解析」，装好再重启 |
 | 重启后当前对话断了、agent 没来得及报告 | 重启前没把话说完。回到「重启规则」第 1 步 |
 | 装完 `dsh-extensions` 一直显示 dirty | 没更新父仓指针。`git add <submodule 路径> && git commit` |
 | `git submodule add` 报路径已存在 | 目录已被 `git clone` 占位。删掉重新用 `submodule add`，或 `git submodule add --force` |
