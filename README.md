@@ -10,6 +10,7 @@ DSH 技能分组仓：**self-dsh**
 
 - `browser-mcp-playwright`
 - `cbm-graph-first`
+- `dev-docs`
 - `dotnet-backend-tdd`
 - `dsh-extension-dev`
 - `unreal-editor-mcp-ops`
