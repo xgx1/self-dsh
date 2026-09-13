@@ -187,6 +187,32 @@ pnpm build       # 按上游 README；产物目录通常被上游 .gitignore 忽
 
 `pnpm install` 在这类仓库里有**两个已知拦路虎**：`ERR_PNPM_IGNORED_BUILDS`（按报错点名的键加进该目录 `pnpm-workspace.yaml` 的 `allowBuilds`）与网络代理（见「常见坑」）。
 
+**运行时依赖必须能解析**（2026-09-13 实测）：`link:` 插件的 import 由 Node 从 **vendor 真实路径**解析，不走 profile 的 `node_modules`；插件的 `lib/*.js` 里 externalize 的 `@deepseek-ai/*` 不会自动看到安装闭包，缺一个就整棵插件树加载失败（dsh-web 进入崩溃重启循环，且报错先撞上哪个包就报哪个）。先看产物到底 import 了什么：
+
+```bash
+cd ~/projects/MyAI/dsh-extensions/vendor/<repo>
+grep -rhoE 'from "[^.][^"]*"' lib/*.js | sort -u
+```
+
+如果其中有 `@deepseek-ai/*`，把它们指到安装闭包（版本随生产 harness 走，且共享模块实例）：
+
+```bash
+cd ~/projects/MyAI/dsh-extensions/vendor/<repo>
+for p in $(python3 -c "import json;d=json.load(open('package.json'));ks=set(d.get('peerDependencies',{}))|set(d.get('dependencies',{}));print(' '.join(k for k in ks if k.startswith('@deepseek-ai/')))"); do
+  [ -e "$HOME/.dsh/profiles/node_modules/$p" ] || continue
+  rm -rf "node_modules/$p"
+  mkdir -p "$(dirname "node_modules/$p")"
+  ln -sfn "$HOME/.dsh/profiles/node_modules/$p" "node_modules/$p"
+  echo "linked $p"
+done
+```
+
+`pnpm install --prod` 实测会保留这些外来软链；链完再重启（见 A6）。判断插件的 import 是否全部可解析，不必起服务：
+
+```bash
+cd ~/.dsh/profiles/web && node --input-type=module -e "await import('<包名>'); console.log('import OK')"
+```
+
 ### A6. 重启（见下方「重启规则」）
 
 **为什么 bundle 装完必须重启**（不是凭经验，是机制）：`profile-boot.ts` 的 `composeLive()` 只重读两个 user patch 文件——`profiles/web/cordis.patch.yml` 与 `~/.dsh/cordis.patch.yml`；**bundle 层的 patch 在 boot 时就被快照进 `composed.bundlePatches`，不参与热重载**。所以：
@@ -412,7 +438,7 @@ systemd-run --user --collect --on-active=10 --unit=dsh-restart-once systemctl --
 | `ERR_PNPM_IGNORED_BUILDS` | 依赖带 postinstall 被 pnpm 拦下。按报错点名的**确切键**加进 `~/.dsh/profiles/web/pnpm-workspace.yaml` 的 `allowBuilds`，再重跑 |
 | lockfile 漂移报错 | 加 `--no-frozen-lockfile` |
 | 重启后 `plugin tree failed to load`、页面打不开 | 新插件没激活（多半 bundles 缺项，或它自己的 `cordis.patch.yml` 有语法错）。**别让它留在崩溃循环里**：先 `journalctl --user -u dsh-web -n 60` 看报错，改完再重启 |
-| `Cannot find package '@deepseek-ai/…' imported from …/vendor/…` | 检出被改名/移动过，vendor 里的绝对符号链接悬空。检查 `find ~/projects/MyAI/dsh-extensions -xtype l`，重指后重启 |
+| `Cannot find package '@deepseek-ai/…' imported from …/vendor/…` | 两种原因：① 检出被改名/移动过，vendor 里的绝对符号链接悬空——`find ~/projects/MyAI/dsh-extensions -xtype l` 排查后重指；② 插件 externalize 了 `@deepseek-ai/*`，但 vendor 里没有可解析副本（`pnpm install` 什么都没装，或只装了 devDeps 的旧版本）。修法见 A5「运行时依赖必须能解析」，链好再重启 |
 | 重启后当前对话断了、agent 没来得及报告 | 重启前没把话说完。回到「重启规则」第 1 步 |
 | 装完 `dsh-extensions` 一直显示 dirty | 没更新父仓指针。`git add <submodule 路径> && git commit` |
 | `git submodule add` 报路径已存在 | 目录已被 `git clone` 占位。删掉重新用 `submodule add`，或 `git submodule add --force` |
