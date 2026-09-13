@@ -1,6 +1,6 @@
 ---
 name: installing-dsh-extensions
-description: "从源码安装 DSH 扩展的全流程：fork 上游 → 克隆 fork → 装成 profile 插件或技能分组仓 → 重启生效。触发词：安装扩展、装插件、装 DSH 扩展、安装 DSH 插件、从源码安装、fork 上游、vendor 插件、install extension、装个技能组。含两条链路（插件 vendor/ + 技能 skills/）、dsh plugin 自动 reconcile bundles、upstream 远端约定、重启不中断报告的延时做法与常见坑（pnpm 代理、allowBuilds、悬空软链、崩溃循环）。"
+description: "从源码安装 DSH 扩展的全流程：fork 上游 → 克隆 fork → 装成 profile 插件或技能分组仓 → 重启生效；MCP server 则免 fork、只改 patch 配置。触发词：安装扩展、装插件、装 DSH 扩展、安装 DSH 插件、装 MCP、接入 MCP、安装 mcp server、从源码安装、fork 上游、vendor 插件、install extension、装个技能组。含三条链路（插件 vendor/ + 技能 skills/ + MCP patch）、dsh plugin 自动 reconcile bundles、upstream 远端约定、MCP 热加载与 failOnStartupError 静默消失陷阱、重启不中断报告的延时做法与常见坑。"
 ---
 
 # 安装 DSH 扩展（源码 fork 流水线）
@@ -13,19 +13,21 @@ description: "从源码安装 DSH 扩展的全流程：fork 上游 → 克隆 fo
 
 问一句「这个扩展是**插件**还是**技能**？」，后续每一步都不同：
 
-| | 插件形态 | 技能分组仓形态 |
-|---|---|---|
-| 是什么 | 独立 npm 包（有 `package.json`、`dsh.bundle`） | 一组 `SKILL.md` 目录 |
-| 落点 | `dsh-extensions/vendor/<仓库名>/` | `dsh-extensions/skills/<上游仓库名>/` |
-| 接入 | `profiles/web/package.json` 的 `link:` 依赖 | `install-skill.sh` 递归扫 `SKILL.md` 软链 |
-| 生效 | **必须重启** | **不必重启**（技能按需扫描） |
+| | 插件形态 | 技能分组仓形态 | MCP 形态 |
+|---|---|---|---|
+| 是什么 | 独立 npm 包（有 `package.json`、`dsh.bundle`） | 一组 `SKILL.md` 目录 | 外部 MCP server 的接入配置 |
+| 落点 | `dsh-extensions/vendor/<仓库名>/` | `dsh-extensions/skills/<上游仓库名>/` | `~/.dsh/profiles/web/cordis.patch.yml` |
+| 接入 | `profiles/web/package.json` 的 `link:` 依赖 | `install-skill.sh` 递归扫 `SKILL.md` 软链 | `insert` 一行 `@deepseek-ai/dsh-mcp-client` |
+| 生效 | **必须重启** | **不必重启**（技能按需扫描） | **不必重启**（patch 层热加载） |
 | 父仓指针 | submodule | submodule |
 
 两者都是 git submodule，装完必须回 `dsh-extensions` 更新指针（ADR-0005：这是固定成本，不是收尾可选项）。
 
 > **不属于本技能**：动态 Cordis 插件（`cordis_define`/`cordis_run`，进程内、重启即失，见 `cordis-plugin-development`）；MCP 服务接入（改 `cordis.patch.yml` 挂 mcp 行，不是源码扩展）。
 
-## 通用前三步（两条链路相同）
+## 通用侦察（插件与技能形态相同；MCP 只需第 2 步）
+
+> **MCP 形态跳过第 1、3 步**——它不 fork、不上游，只需第 2 步确认「是不是已经接过了」，然后直接进链路 C。
 
 ### 1. 定位上游仓库
 
@@ -45,6 +47,8 @@ npm view <包名> repository.url
 cat ~/.dsh/profiles/web/package.json | python3 -m json.tool | grep -A20 dependencies
 # 已装的技能
 ls ~/.dsh/skills/ | grep -i <关键词>
+# 已接入的 MCP（profile 与 home 两处 user patch 层）
+grep -n 'serverName' ~/.dsh/profiles/web/cordis.patch.yml ~/.dsh/cordis.patch.yml 2>/dev/null
 # 已在 vendor/ 或 skills/ 里的
 ls ~/projects/MyAI/dsh-extensions/vendor/ ~/projects/MyAI/dsh-extensions/skills/
 ```
@@ -234,6 +238,94 @@ ls -la ~/.dsh/skills/<技能名>     # 应是指向分组仓的符号链接
 ```
 
 **技能够了，不必重启**：DSH 按需扫描技能目录，软链建好即可用。
+
+## 链路 C：MCP 形态
+
+**MCP 是配置层，不是依赖层——不要 fork、不要 `git submodule add`、不要改 `package.json`。**
+`@deepseek-ai/dsh-mcp-client` 是 DSH 自带包，每个 MCP server 只是 `/profiles/web/cordis.patch.yml` 里的一个 `insert` 块。这也和"一切走源码安装"的总纲（ADR-0007）不冲突：那条总纲针对的是**要装进 profile 的插件依赖**，MCP 没有依赖可装。
+
+### C1. 先确认 server 本体可用
+
+MCP 只负责"接进来"，不负责"装上"。接入前先确保那台 server 真的能跑：
+
+```bash
+# stdio 型：命令必须在 PATH 里（DSH 在它自己的进程环境里解析命令）
+command -v <command> && <command> --help 2>&1 | head -3
+
+# http 型：服务得先起着
+curl -sS -o /dev/null -w '%{http_code}\n' <url>
+```
+
+stdio 型 server 的安装属于**普通软件安装**（`npm i -g` / `uv tool install` / pacman…），做完要确认命令落在 `PATH` 上——MCP 子进程继承的是 dsh-web 的环境。
+
+### C2. 写 insert 块
+
+在 `~/.dsh/profiles/web/cordis.patch.yml` 末尾追加（**一个 server 一个块**，不要塞进已有的块里）：
+
+```yaml
+# stdio 型：DSH 自己拉起子进程
+- insert:
+    - id: mcp-<名字>
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: <名字>          # 工具前缀就是 mcp__<名字>__
+        transport: stdio
+        command: <命令>
+        args:
+          - '<参数>'
+```
+
+```yaml
+# http 型：连已存在的服务
+- insert:
+    - id: mcp-<名字>
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: <名字>
+        transport: streamable-http
+        url: http://127.0.0.1:<端口>/mcp
+```
+
+字段说明：`id` 与 `serverName` **都要唯一**（同一个 `serverName` 注册两次会冲突）；`transport` 只有 `stdio` 与 `streamable-http` 两种。
+
+### C3. 首次务必让失败可见（`failOnStartupError`）
+
+默认（不写这个字段）是 **true**：MCP 起不来就报错。**第一次接一个 server 时保持默认**——错了立刻知道。
+
+反过来，这种配置**会静默消失**：`failOnStartupError: false` + 命令不存在 / 端口没服务。本机就踩过——headroom 的旧配置写着一个从不存在的 `127.0.0.1:8791`，又带着 `false`，于是 DSH 默默跳过，会话里一直没有 `mcp__headroom__*` 工具，没人发现。所以：
+
+- 调试期用默认（true），确认稳定后再决定是否放宽
+- 写 `failOnStartupError: false` 时必须配一条注释说明**为什么可以容忍它不在**（例：`mcp-ue` 依赖编辑器开着）
+
+### C4. 生效：热加载，不用重启
+
+`profiles/web/cordis.patch.yml` 属于 **user patch 层**，DSH 会热加载它——改完立即重拉 MCP 子进程。这条只对 **user patch 层**成立（`profiles/web/cordis.patch.yml` 与 `~/.dsh/cordis.patch.yml`）；**bundle 层 patch 不参与热加载**，那是插件形态才要重启的原因（见 A6）。
+
+验证：
+
+```bash
+# ① 子进程真的被拉起来了（父进程应为 dsh-web 的 MainPID）
+pgrep -af '<命令>' | head
+systemctl --user show dsh-web.service -p MainPID
+# ② 起不来时看日志
+journalctl --user -u dsh-web -n 60 | grep -i mcp
+# ③ 最终判据：新会话的工具表里出现 mcp__<serverName>__*
+```
+
+**若配置写坏导致 dsh-web 崩溃循环**：直接在那个块里加 `disabled: true` 整个禁用它，或删掉该块；热加载会让它立刻退场。别让服务留在重启循环里（每 3s 一次，`NRestarts` 飙升）。
+
+### C5. 提交（这一步才是"换台设备也能用"）
+
+好消息：`profiles/web/cordis.patch.yml` **本来就在 `~/.dsh` 仓库的跟踪范围内**，所以改完它天然会随仓库走：
+
+```bash
+cd ~/.dsh
+git add profiles/web/cordis.patch.yml
+git commit -m "feat: 接入 <名字> MCP"
+git push
+```
+
+**但配置能同步 ≠ 那台设备就能用**：`stdio` 型依赖那台设备的 `PATH` 里有那个命令，`http` 型依赖那台设备的服务在跑。所以注释里要写清前置条件，否则新设备上就是 C3 那种静默消失。写注释时至少交代：**server 本体怎么装、依赖什么外部服务、代理要不要清**（本机 headroom 那条就写明了必须清 `all_proxy`，否则 MCP 子进程连本机 8787 会报 `socksio` 缺失）。
 
 ## 重启规则
 
