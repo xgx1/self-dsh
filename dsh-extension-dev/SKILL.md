@@ -5,6 +5,8 @@ description: DSH 功能扩展开发元技能（先搜索复用、无现成才自
 
 # DSH 扩展开发（基本原理 + 四条规矩）
 
+> **平台约定**：本机主力环境是 Linux（Arch）——命令以 bash 为先、可直接执行；Windows 专属步骤一律收进「Windows（PowerShell）」小节，不在 Linux 段落里混用。
+
 ## 0. 扩展的本质（原理速览）
 
 DSH 是微内核 + Cordis 插件树：一切功能都是挂在文档化扩展点上的插件。Host 跑在 Node 进程里（文件/网络/命令/Tool），Client 跑在浏览器页面里（Slot UI/主题/页面状态），两者经包私有 JSON RPC 通信。
@@ -21,7 +23,7 @@ DSH 是微内核 + Cordis 插件树：一切功能都是挂在文档化扩展点
 
 权威资料（以当前仓库证据为准，不靠记忆）：
 
-- 本机 checkout：`I:\Project\Other\deepseek-harness\docs\cookbook\extension-cookbook.md`、`docs\cordis-primer.md`（有 .zh 中文版）
+- 本机 checkout：`~/projects/MyAI/deepseek-harness/docs/cookbook/extension-cookbook.md`、`docs/cordis-primer.md`（有 .zh 中文版；Windows 时代对应 `I:\Project\Other\deepseek-harness\docs\cookbook\` 下的同名文档）
 - 官方 GitHub：deepseek-ai/deepseek-harness 的 `docs/` 与 `packages/`
 - 社区同类技能参考：`w2112515/dsh-plugin-development`（本技能的「形态分类 + 证据优先」思路吸收自它；它的 dsh.bundle/Loader 内容针对旧版部署，本机不适用，勿照搬）
 
@@ -81,4 +83,6 @@ DSH 是微内核 + Cordis 插件树：一切功能都是挂在文档化扩展点
 - **覆盖官方 Web UI 样式**：不能靠 hashed CSS-module 类名（不可预测）。用官方 DOM 的稳定 data 属性做锚（`[data-phase]`、`[data-composer-card]`、`[data-composer-seat]`、slot 渲染的 `[data-slot='...']`），规则以扩展自己的 `<html>` data 属性门控（`html[data-x] ...`），关 = 属性移除即还原；覆盖官方 CSS 变量用更高特异性选择器（如 `div[data-phase]` 0,1,1 > `.ConversationRoot_root` 0,1,0）
 - **侧边栏等无 seat 区域的 UI 挂载**：`waitForElement('[data-slot="sidebar.workspaces"]')`（MutationObserver）+ 目标前 `insertBefore` 锚点 + `createRoot` 挂 React（aionui-panel 先例；dsh-sidebar-taskbar 用之插入任务栏）；折叠检测用 ResizeObserver 看父列宽
 - **独立 client bundle 构建**：官方 `clientBundle` 预设只在官方仓库内可用；独立包复制其要点即可——`window.__ModuleLoader__.load({id, factory: require => ...})` banner/footer + platform 模块 external（react、ui-primitives、runtime/client 等）+ `define` 替换 process.env；CSS Modules 可用 lightningcss 插件或直接内联 style/常量
-- **pnpm 在本机 profiles/web 装 link 包时网络失败**：设 `$env:HTTPS_PROXY/HTTP_PROXY=http://127.0.0.1:7897` 重试（`dsh plugin add` 超时/`fetch failed` 均此处理）；`--no-frozen-lockfile` 应对 lockfile 漂移
+- **pnpm 在本机 profiles/web 装 link 包时网络失败**：设代理后重试（`dsh plugin add` 超时/`fetch failed` 均此处理）；`--no-frozen-lockfile` 应对 lockfile 漂移
+  - Linux（bash）：`export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897 all_proxy=socks5://127.0.0.1:7897`（本机默认已设，可用 `env | grep -i proxy` 核对）
+  - Windows（PowerShell）：`$env:HTTPS_PROXY = "http://127.0.0.1:7897"; $env:HTTP_PROXY = "http://127.0.0.1:7897"`
