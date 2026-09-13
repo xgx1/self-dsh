@@ -8,11 +8,10 @@ DSH 技能分组仓：**self-dsh**
 
 ## 内容
 
-- `agent-teams-orchestration-pitfalls`
-- `browser-unreal-mcp`
+- `browser-mcp-playwright`
 - `cbm-graph-first`
 - `dotnet-backend-tdd`
 - `dsh-extension-dev`
-- `role-templates`
+- `unreal-editor-mcp-ops`
 
 由 `dsh-extensions/install-skill.sh` 软链进 `~/.dsh/skills/`。
