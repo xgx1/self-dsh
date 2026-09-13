@@ -22,6 +22,7 @@ DSH 技能分组仓：**self-dsh**
 - `fix-feature-issues`
 - `git-merge-cleanup`
 - `init-feature-dev`
+- `installing-dsh-extensions`
 - `make-feature-plan`
 - `mcp-csharp-create`
 - `mcp-csharp-debug`
