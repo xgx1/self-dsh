@@ -60,6 +60,29 @@ gh repo view <owner>/<repo> --json name,visibility,isFork
 
 `git ls-remote` 失败通常是网络/代理问题，见「常见坑」。
 
+## 场景：它已经装好了怎么办
+
+第 2 步侦察要是发现**目标已装**，**不要重装**——重跑 `pnpm install` 会重算 lockfile 引入漂移风险，而且不会带来任何新能力。改成**巡检**，逐条只读核实，哪条不过才补哪条：
+
+```bash
+# ① 依赖与层栈
+grep -E '<包名>|link:' ~/.dsh/profiles/web/package.json
+# ② 软链真的落在源码上
+ls -la ~/.dsh/profiles/web/node_modules/<包名>
+# ③ 产物新鲜（见 A5）
+find <源码>/src -newer <源码>/lib/index.js -type f | head
+# ④ submodule 指针已提交（见「验收清单」第 1 项）
+cd ~/projects/MyAI/dsh-extensions && git ls-tree HEAD vendor/<repo>
+# ⑤ 无悬空软链（改名/移动过检出时的典型故障）
+find ~/projects/MyAI/dsh-extensions -xtype l | wc -l    # 期望 0
+# ⑥ 服务健康
+systemctl --user show dsh-web -p NRestarts               # 期望不是很大的数
+```
+
+**最强的证据是运行时**：插件的 Tool 出没出现在工具表、它带来的技能出没出现在会话技能目录。文件摆对只说明「摆对了」，功能真的可见才证明「加载起来了」。
+
+巡检结论是**四层都不用提交**时，这本身就是正确交付——不要为了"做了点什么"而制造改动。
+
 ## 链路 A：插件形态
 
 ### A1. fork 上游到自己的账号
@@ -68,9 +91,35 @@ gh repo view <owner>/<repo> --json name,visibility,isFork
 # 账号 xgx1（gh 已登录）。不指定 --org 时 fork 到当前登录账号
 gh repo fork <owner>/<repo> --clone=false
 # → 得到 https://github.com/xgx1/<repo>
+gh repo view xgx1/<repo> --json name,isFork,parent   # 确认 fork 真的建好了
 ```
 
-**为什么必须 fork 而不是直接 clone 上游**：fork 之后 origin 是自己的仓，本机改动才能推送回去、才能跨设备重建；上游降级为 `upstream` 远端只作对照（ADR-0006 的同一套纪律）。直接 clone 上游等于把生产依赖挂在一个自己无权推送的仓库上。
+**默认走 fork**：fork 之后 origin 是自己的仓，本机改动才能推送回去、才能跨设备重建；上游降级为 `upstream` 远端只作对照。
+
+**但要如实区分现状，别把两个分组的设计搞混**（2026-09-13 实测）：
+
+| 分组 | 现状 | 设计 |
+|---|---|---|
+| `skills/` | 14/14 都是 `xgx1/*` fork（或自建仓） | **fork**——本机改编版是主内容，要能推（ADR-0006） |
+| `vendor/` | 3/3 都**直连上游**（`omdsh-dev/*`、`loudMore/*`），没有 `upstream` 远端 | 上游克隆，只跟踪（ADR-0005） |
+
+所以「必须 fork」是 `skills/` 的纪律，**不是 `vendor/` 的现状**。在 `vendor/` 里装新插件时：
+
+- **你打算改这个插件的源码** → 先 fork，再 `git submodule add` **fork 的 URL**（origin=fork → 能推）
+- **只跟着上游走、不改** → 可以直连上游，但那样你推不了任何修复；要推送就必须先 fork
+
+**存量迁移**（把已直连上游的 vendor 子模块改成 fork，非必须）：
+
+```bash
+gh repo fork <owner>/<repo> --clone=false
+cd ~/projects/MyAI/dsh-extensions
+git submodule set-url vendor/<repo> https://github.com/xgx1/<repo>.git
+git submodule sync vendor/<repo> && git -C vendor/<repo> remote set-url origin https://github.com/xgx1/<repo>.git
+git -C vendor/<repo> remote add upstream <上游URL>
+git add .gitmodules vendor/<repo> && git commit -m "chore: vendor/<repo> 改指 fork"
+```
+
+重建 submodule 期间 `link:` 会短暂指向不可用路径，**不要在生产运行时段做**。
 
 ### A2. 克隆 fork 并登记为 submodule
 
@@ -78,10 +127,11 @@ gh repo fork <owner>/<repo> --clone=false
 
 ```bash
 cd ~/projects/MyAI/dsh-extensions
-git submodule add https://github.com/xgx1/<repo>.git vendor/<repo>
+git submodule add https://github.com/xgx1/<repo>.git vendor/<repo>   # A1 走了 fork 时
 cd vendor/<repo>
 git remote add upstream <上游URL>          # 上游只作对照，不覆盖本地
 git fetch upstream
+git log --oneline -1 upstream/<分支>        # 确认对照基线拿得到
 ```
 
 ### A3. 确认包名——**不等于仓库名**
@@ -112,16 +162,38 @@ dsh plugin --profile web add link:/home/sx/projects/MyAI/dsh-extensions/vendor/<
 grep -E '<包名>|link:' ~/.dsh/profiles/web/package.json
 ```
 
-### A5. 若上游要求构建
+### A5. 构建产物必须新鲜
 
-`link:` 引用的是源码，但 profile 加载的是构建产物。检查 `package.json` 的 `main`/`exports` 指向的目录是否已存在：
+`link:` 引用的是源码，但 profile 真正加载的是**构建产物**。只检查目录存在是不够的——源码改过、产物没重建，是最隐蔽的失效方式（插件照常加载，跑的是旧代码）。
 
 ```bash
-ls lib/ dist/ 2>/dev/null    # exports 指向的产物目录
-pnpm install && pnpm build   # 缺失时按上游 README 构建
+# 1. 产物在不在（按 package.json 的 main/exports 找，通常是 lib/ 或 dist/）
+ls lib/ dist/ 2>/dev/null
+
+# 2. 产物新不新：有没有 src 文件比入口产物更晚
+find src -newer lib/index.js -type f 2>/dev/null | head    # 有输出 = 陈旧，需要重建
 ```
 
+需要重建时：
+
+```bash
+pnpm install     # vendor/ 下的克隆常没有 node_modules（实测 dsh-genui 就没有）
+pnpm build       # 按上游 README；产物目录通常被上游 .gitignore 忽略，不进任何仓库
+```
+
+`pnpm install` 在这类仓库里有**两个已知拦路虎**：`ERR_PNPM_IGNORED_BUILDS`（按报错点名的键加进该目录 `pnpm-workspace.yaml` 的 `allowBuilds`）与网络代理（见「常见坑」）。
+
 ### A6. 重启（见下方「重启规则」）
+
+**为什么 bundle 装完必须重启**（不是凭经验，是机制）：`profile-boot.ts` 的 `composeLive()` 只重读两个 user patch 文件——`profiles/web/cordis.patch.yml` 与 `~/.dsh/cordis.patch.yml`；**bundle 层的 patch 在 boot 时就被快照进 `composed.bundlePatches`，不参与热重载**。所以：
+
+| 改什么 | 生效方式 |
+|---|---|
+| `profiles/web/cordis.patch.yml`、`~/.dsh/cordis.patch.yml` | 热重载，立即生效 |
+| 新增 bundle / 改 bundle 自己的 `cordis.patch.yml` | **必须重启** |
+| bundle 的 lib 产物 | **必须重启** |
+
+⚠️ profile patch 里那句「DSH 会热加载本 patch，改完立刻生效」只对**它自己这个文件**成立，不能外推到 bundle 层。
 
 ## 链路 B：技能分组仓形态
 
@@ -209,15 +281,27 @@ Get-Service dsh-web
 
 ## 验收清单
 
-装完逐项确认，缺一项就不算装好：
+装完逐项确认，缺一项就不算装好。前 4 项两条链路都要；**后 2 项按形态二选一**——插件形态不看技能项，技能形态不看插件项：
+
+**通用（插件、技能都要）**
+
+- [ ] submodule 已提交：`git ls-tree HEAD <路径>` 返回 `160000 commit …`。**别用 `git status` 判断**——指针提交后 status 本来就是干净的，它无法区分「已提交」与「根本没登记」
+- [ ] 上游可对照：有上游的仓库 `git remote -v` 里能看到 `upstream`
+- [ ] `dsh-extensions` 的 `git status` 不再显示该 submodule 为 modified（这才是 `git status` 的正确用法：看**漏更新指针**）
+- [ ] 功能实际可见（新 Tool / 新界面 / 设置项 / 新技能）
+
+**插件形态专属**
 
 - [ ] `~/.dsh/profiles/web/package.json` 的 dependencies 里有指向 fork 的 `link:`，路径是**绝对路径**
 - [ ] `dsh.profile.bundles` 里出现了该**包名**（`dsh plugin add` 自动加；手工装的要自己加）
 - [ ] `ls -la ~/.dsh/profiles/web/node_modules/<包名>` 指向 vendor 源码
-- [ ] `cd dsh-extensions && git status` 显示 submodule 已登记，`.gitmodules` 有新条目
 - [ ] 重启后 `systemctl --user is-active dsh-web.service` = `active`，页面能打开
-- [ ] 功能实际可见（新 Tool / 新界面 / 设置项）
-- [ ] 技能形态额外：`./install-skill.sh --list` 能列出，`~/.dsh/skills/<名>` 是软链
+
+**技能形态专属**
+
+- [ ] `./install-skill.sh --list` 能列出该技能，`~/.dsh/skills/<名>` 是指向分组仓的软链
+
+> **插件自带技能时不看上面的技能项**：有些插件通过 `ctx.skills.registerProvider()` 在运行时提供技能（例：`dsh-genui` 的 `~/.dsh/skills/genui` **不存在是正常的**）。`install-skill.sh` 只扫 `skills/`、`update-app/skills/`、各项目 `.dsh/skills/` 三个源，**不扫 `vendor/`**——所以在 `~/.dsh/skills/` 里找不到它不代表装漏了，看会话技能目录里有没有出现即可。
 
 ## 回滚
 
