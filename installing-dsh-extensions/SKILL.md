@@ -243,13 +243,14 @@ ls -la ~/.dsh/skills/<技能名>     # 应是指向分组仓的符号链接
 2. **再延时重启**，用 systemd 的定时器把重启与本进程解耦，让当前会话有机会先把话说完：
 
 ```bash
-# 3 秒后重启：定时单元独立于本进程，报告来得及发出去
-systemd-run --user --collect --on-active=3 --unit=dsh-restart-once \
+# 10 秒后重启：定时单元独立于本进程，报告来得及发出去
+systemd-run --user --collect --on-active=10 --unit=dsh-restart-once \
   systemctl --user restart dsh-web.service
 ```
 
-- `--collect` 让一次性单元执行后自动清理，**单元名可以重复使用**（不加它，第二次装扩展会因单元名已存在而失败）。
-- 命令返回即表示重启**已排程**，此刻还没断线——报告要在 3 秒内发完。
+- `--collect` 让一次性单元执行后自动清理，**单元名可以重复使用**（不加它，第二次装扩展会因单元名已存在而失败）。它**不影响取消**：延迟窗口内 `systemctl --user stop dsh-restart-once.timer` 仍可撤销（实测）。
+- 命令返回即表示重启**已排程**，此刻还没断线——**本轮最终回复必须在 10 秒内说完**；排程后不要再发新一轮工具调用（每个调用都在消耗延迟窗口）。
+- 延迟取 10 秒：给「排程返回 → 报告说完」留余量。3 秒会让长报告说到一半就被切断。
 
 **不要用 `nohup ... sleep 3 ... &` 兜底**：`dsh-web.service` 是 `KillMode=control-group`（已实测），重启会杀掉整个 cgroup，连你的后台延时进程一起带走，重启永远不会发生。`systemd-run` 不在同组，所以只有它能做这件事。
 
@@ -308,7 +309,7 @@ Get-Service dsh-web
 ```bash
 dsh plugin --profile web remove <包名>      # 依赖与 bundles 一并退场
 cd ~/projects/MyAI/dsh-extensions && git rm vendor/<repo> && git commit
-systemd-run --user --collect --on-active=3 --unit=dsh-restart-once systemctl --user restart dsh-web.service
+systemd-run --user --collect --on-active=10 --unit=dsh-restart-once systemctl --user restart dsh-web.service
 ```
 
 ## 常见坑
