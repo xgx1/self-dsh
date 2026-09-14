@@ -45,7 +45,7 @@
 
 以下是对"快照发引用 + 直接 Slate 事件注入"这类工具集（如官方 SlateInspector）的实测行为结论，按行为描述、与具体版本无关。**在 PIE 内驱动 UMG 时尤其要按此执行：**
 
-- **Click ≠ 触发 OnClicked**：鼠标事件注入对 PIE 内 UMG 按钮经常返回 true 但不触发点击处理（UMG 输入走游戏视口自己的路由，直接 Slate 注入进不去）。可靠组合：`Click`（只为拿焦点）→ `PressKey Enter`（Slate 按钮的键盘触发路径）。
+- **Click ≠ 触发 OnClicked**：鼠标事件注入对 PIE 内 UMG 按钮经常返回 true 但不触发点击处理（UMG 输入走游戏视口自己的路由，直接 Slate 注入进不去）。可靠组合：`Click`（只为拿焦点）→ `PressKey Enter`（Slate 按钮的键盘触发路径）。**注意 Slate 点击能"进"游戏，但只能落在控件中心**：PIE 的游戏 UMG 不在无障碍树里（`Snapshot` 只返回几层全屏 `image`），所以 ref 点击的落点是视口正中——悬停高亮会出现，但点不到任意按钮。要按坐标点必须降到系统级注入（见下一节）。
 - **Type 是追加不是替换**：逐字符键事件直接追加到现有内容。改值前必须 `Click` 输入框 → `PressKey Ctrl+A` → 再 `Type`，否则新旧拼接（实测曾拼出 16 位"手机号"）。
 - **下拉选择工具打不开 PIE 内 ComboBox**（返回 false）：改走键盘——`Click` 聚焦 → `Down` 打开列表 → `Up`/`Down` 移动高亮 → `Enter` 提交。方向键语义是"移动高亮项"而非"展开"，且起始位置随当前选中项变化，**每按一步截图确认高亮再动手**。
 - **引用（ref）跨页面切换全部失效**：登录页→模式页这类整体换树之后必须重新 Snapshot；同一页面内布局变化（如下拉展开导致后续控件位移）会让旧 ref 的位置作废但 ref 本身仍可用。
@@ -64,6 +64,28 @@
 - 从 agent shell 直接启动 GUI 编辑器会 `InitSDL() failed`：缺图形会话环境。从图形会话进程（Xwayland/plasmashell 等）的 `/proc/<pid>/environ` 提取 `DISPLAY`/`WAYLAND_DISPLAY`/`XDG_SESSION_TYPE`/`DBUS_SESSION_BUS_ADDRESS` 再启动。
 - 杀编辑器进程时 `pkill -f "UnrealEditor..."` 会自匹配杀掉自己的 shell（命令行里含同样文字）——用 `[U]nrealEditor` 方括号 trick 破自匹配。
 - 启动日志里的 UnrealTraceServer "daemon is exiting" 是 trace 守护进程的噪音，不是编辑器死了；判活只看编辑器进程与本体端口。
+
+## PIE 内交互：系统级注入是正解（2026-09-14 实测，Linux/Xwayland 全链路跑通）
+
+当 Slate 工具集够不到游戏 UMG（上一节）时，**用系统级鼠标/键盘注入（xdotool）走真实 UI 路径**，观察仍用 Slate 截图（它不受窗口遮挡影响）。实测用它跑通了登录校验、模式选择、答题页拖拽、选项提交、末题收卷、结果页、服务器考试列表等整条链路。
+
+坐标与窗口：
+
+- **屏幕坐标 = 窗口原点 + 图像坐标**；窗口原点从 `xdotool getwindowgeometry --shell <win>` 现取，图像坐标从当次截图量（截图与客户区 1:1）。
+- **每次动作前重取几何、每次动作后截图复核**：PIE 浮窗会被重排/移动/改尺寸（实测 1272×692 ↔ 631×692、x 从 4 漂到 1923），复用上一张截图的坐标必然打空。**面板还会因内容变化上下浮动**（多一行少一行，整体平移十几像素）——坐标只能对"刚截的那张"有效。
+- **点前必须校验指针下的窗口**：`xdotool getmouselocation --shell | grep WINDOW` 必须等于 PIE 窗口 id；不等就拒绝点击并报错。**没有这道守卫时，误击别的窗口会被当成产品 bug**（实测一次误击 + 编辑器随后退出，差点判成"点选项导致崩溃"）。
+- **遮挡处理**：无 WM 的 Xwayland 上 `windowraise` 单独用常常无效，要**先把遮挡者压到底再抬自己**：`xdotool windowlower <遮挡窗口> && xdotool windowraise <PIE窗口>`，然后再校验一次指针窗口。遮挡者可能是别的应用（远程桌面/IM），且会**反复浮回来**——所以守卫要常驻，不能只在开头做一次。
+
+输入：
+
+- 键盘：先 `xdotool windowfocus <PIE窗口>` 把 X 输入焦点给它；`xdotool type` 可送中文（实测「王五」正常落进 UMG 输入框），即使窗口被遮挡也能送到（按键走焦点，不走指针）。
+- 拖拽：`mousemove → mousedown → 分步 mousemove（每步 sleep 30–50ms）→ mouseup`；步数 12–16，一次跳到终点 UMG 常常不认。
+- 点击：`mousemove → sleep 0.25 → mousedown → sleep 0.12 → mouseup`。按钮小（约 35×29px）时坐标差 20px 就落进"两个按钮之间的缝"——点击无反应**先怀疑坐标，别怀疑产品**。
+
+诊断纪律（避免把渲染问题误判成数据问题，反之亦然）：
+
+- 控件"看起来没更新"时，先用 `UE_LOG` 打三件事：**控件树是否建起来（RootWidget/子项数）、文本是否真的设对了（打印字符串本体）、以及是哪个分支在跑**。实测因此把「文本根本没设」与「文本设了但那一层布局不渲染」分开——两者修法完全不同。
+- 编辑器在退出清理阶段可能崩在引擎断言（UE 5.8 实测：`Assertion failed: InitState == EWorldPartitionInitState::Uninitialized` @ `WorldPartition.cpp`）。**这是拆除期噪声，不是玩法逻辑崩溃**；判断"是不是我点崩的"要看退出请求（`LogCore: Engine exit requested`）出现在点击之前还是之后。
 
 ## 与浏览器 MCP 的同构性
 

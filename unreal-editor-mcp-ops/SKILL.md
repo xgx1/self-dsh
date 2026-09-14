@@ -32,7 +32,7 @@ description: "在运行中的虚幻编辑器里通过 MCP 操作时的决策与�
 
 1. **有确定性工具吗？** → `describe_toolset` 查相关 toolset（actors / blueprints / materials / …），有就直接 `call_tool`。90% 的"我想在编辑器里点一下"到这一步就终结了。
 2. **console / Python 能到吗？** → 找名字含 Console / Python 的工具：console 命令（开关功能、Cheat Manager）或 `unreal.*` Python。比模拟点击稳定一个数量级。
-3. **是 PIE 内交互吗？** → 找 Input / PIE / Simulation 相关 toolset 模拟按键鼠标；UMG 按钮点击找 WidgetInteraction / SimulateClick 类能力；没有就 Python 兜底。
+3. **是 PIE 内交互吗？** → 先看 Slate 工具集够不够得着：**PIE 的游戏 UMG 不在无障碍树里**（`Snapshot` 只有几层全屏 image），所以 ref 点击只能落在视口正中、读不到控件文本。要按坐标点按钮/拖拽 → **降到系统级注入（xdotool 真实鼠标键盘）**，观察仍用 Slate 截图；参数、守卫与坐标纪律见 `references/ue-simulation-decisions.md`「PIE 内交互：系统级注入是正解」。
 4. **只剩 UI 路径了吗？** → 模拟点击编辑器 UI。最后手段，按下面五步走。
 
 **模拟点击五步流程（每步不可省）：**
@@ -77,8 +77,10 @@ description: "在运行中的虚幻编辑器里通过 MCP 操作时的决策与�
 |---|---|
 | 看不到 unreal-mcp / list_toolsets 失败 | 编辑器没开 / 服务没起 / 端口被占（`unreal-mcp` 技能 operations.md 矩阵）；**编辑器重启过 → 旧 Mcp-Session-Id 已作废，必须重新 initialize** |
 | UE 调用挂住 | 是否在编译/加载/PIE；等结束或先停 PIE |
-| 点了没反应 | 重新截图确认界面状态；检查焦点窗口；降级到确定性路线 |
-| PIE 注入交互不可靠 | `Click` 对 PIE 内 UMG 按钮返回值真假不定、`OnClicked` 常不触发——交互验收交给用户，AI 只做只读诊断（见 `unreal-official-mcp-surgery`） |
+| 点了没反应 | **先怀疑坐标**（有没有落在两个控件之间的缝里、面板是否因内容变化平移了）；再重新截图确认界面状态与焦点窗口；仍不行降级到确定性路线 |
+| 点击后编辑器退出/崩溃 | **先查有没有点到别的窗口**（指针下窗口校验）；再看 `Engine exit requested` 出现在点击之前还是之后；退出清理期的 WorldPartition 断言是引擎噪声，不是玩法崩溃 |
+| PIE 里点不到游戏按钮 | 游戏 UMG 不在 Slate 无障碍树里 → 改系统级注入；记得先 `windowlower 遮挡者 + windowraise PIE` 并校验指针窗口 |
+| 源码改了但行为没变 | 构建可能没真正生效：查产物时间戳 vs 源码；UBT 报 `Target is up to date` 却源码更新 → `touch` 源文件，仍不重链就删模块产物强制链接（`unreal-official-mcp-surgery` 的编译纪律节） |
 
 ## 维护提示
 
