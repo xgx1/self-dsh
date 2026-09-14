@@ -45,8 +45,11 @@
 
 以下是对"快照发引用 + 直接 Slate 事件注入"这类工具集（如官方 SlateInspector）的实测行为结论，按行为描述、与具体版本无关。**在 PIE 内驱动 UMG 时尤其要按此执行：**
 
-- **Click ≠ 触发 OnClicked**：鼠标事件注入对 PIE 内 UMG 按钮经常返回 true 但不触发点击处理（UMG 输入走游戏视口自己的路由，直接 Slate 注入进不去）。可靠组合：`Click`（只为拿焦点）→ `PressKey Enter`（Slate 按钮的键盘触发路径）。**注意 Slate 点击能"进"游戏，但只能落在控件中心**：PIE 的游戏 UMG 不在无障碍树里（`Snapshot` 只返回几层全屏 `image`），所以 ref 点击的落点是视口正中——悬停高亮会出现，但点不到任意按钮。要按坐标点必须降到系统级注入（见下一节）。
-- **Type 是追加不是替换**：逐字符键事件直接追加到现有内容。改值前必须 `Click` 输入框 → `PressKey Ctrl+A` → 再 `Type`，否则新旧拼接（实测曾拼出 16 位"手机号"）。
+- **PIE 游戏 UMG 拿得到 ref，`Click` 直接生效**（2026-09-14 UE 5.8 实测）：根 `Snapshot`（空 ref）会列出 PIE 浮窗，对它再 `Snapshot` 就能读到游戏按钮/输入框的 ref——干净会话里 3 轮往返 6/6（「本地」↔「退出登录」整页切换）。**返回值不可信**：`Click` 返回 true 也可能什么都没发生；可靠验证是**读控件树看当前页面变了没**（像素对比会被窗口尺寸变化污染）。
+- **ref 行带额外标注，解析要容错**：控件行常长这样 `button "退出登录" [focused] [pos=… size=…] [ref=…]`——只认"紧挨 `pos`"的正则会漏掉这类行（踩过：取 ref 静默返回空，现象看起来像"工具集点不动"）。`[disabled]` 的控件点不动，跳过。
+- **`Snapshot` 的参数是 `maxDepth`（camelCase，默认 30）**：写成 `max_depth` 会被静默忽略——别拿"树很浅/只有几层 image"下结论。
+- **`Click`/`Hover` 会真的挪动系统光标**：内部是 `GetWidgetScreenCenter` + `SetCursorPos`。点完看光标落到哪，可反推它算出的屏幕坐标（实测 Wayland 上确实会移）。
+- **Type 是追加不是替换**：逐字符键事件直接追加到现有内容。改值前必须 `Click` 输入框（先聚焦）→ `PressKey Ctrl+A` → 再 `Type`；漏掉聚焦那步，`Ctrl+A` 落空、新值直接拼在后面（实测拼出 `TestUserAbc`）。
 - **下拉选择工具打不开 PIE 内 ComboBox**（返回 false）：改走键盘——`Click` 聚焦 → `Down` 打开列表 → `Up`/`Down` 移动高亮 → `Enter` 提交。方向键语义是"移动高亮项"而非"展开"，且起始位置随当前选中项变化，**每按一步截图确认高亮再动手**。
 - **引用（ref）跨页面切换全部失效**：登录页→模式页这类整体换树之后必须重新 Snapshot；同一页面内布局变化（如下拉展开导致后续控件位移）会让旧 ref 的位置作废但 ref 本身仍可用。
 - **可访问性快照只有占位符没有已输入值**：核对输入框实际内容只能靠截图目检。
@@ -62,25 +65,33 @@
 ## 无显示环境 / 重启编辑器（Linux）
 
 - 从 agent shell 直接启动 GUI 编辑器会 `InitSDL() failed`：缺图形会话环境。从图形会话进程（Xwayland/plasmashell 等）的 `/proc/<pid>/environ` 提取 `DISPLAY`/`WAYLAND_DISPLAY`/`XDG_SESSION_TYPE`/`DBUS_SESSION_BUS_ADDRESS` 再启动。
+- **从 systemd 用户服务拉起的 shell（如 `dsh-web.service`）env 里连 `DISPLAY`/`WAYLAND_DISPLAY` 都没有**，只有 `XDG_RUNTIME_DIR`：脚本要自己探测补齐——`wayland-*` socket 名、`$XDG_RUNTIME_DIR/hypr/<instance-signature>`。补不齐时 SDL3 会**静默退回 XWayland**：编辑器照常起来，但窗口是 X 客户端，Wayland 那套 hyprctl/ydotool 交互全部对不上（判据只看启动日志里的 `Using SDL video driver '<name>'`）。
 - 杀编辑器进程时 `pkill -f "UnrealEditor..."` 会自匹配杀掉自己的 shell（命令行里含同样文字）——用 `[U]nrealEditor` 方括号 trick 破自匹配。
 - 启动日志里的 UnrealTraceServer "daemon is exiting" 是 trace 守护进程的噪音，不是编辑器死了；判活只看编辑器进程与本体端口。
 
-## PIE 内交互：系统级注入是正解（2026-09-14 实测，Linux/Xwayland 全链路跑通）
+## PIE 内交互（2026-09-14 UE 5.8 + Hyprland 原生 Wayland 实测）
 
-当 Slate 工具集够不到游戏 UMG（上一节）时，**用系统级鼠标/键盘注入（xdotool）走真实 UI 路径**，观察仍用 Slate 截图（它不受窗口遮挡影响）。实测用它跑通了登录校验、模式选择、答题页拖拽、选项提交、末题收卷、结果页、服务器考试列表等整条链路。
+**首选：Slate ref 路径**——对 PIE 窗口树取 ref，`Click`/`Type`/`PressKey` 直接用，干净会话实测 3 轮往返 6/6：
 
-坐标与窗口：
+- 正确姿势：根 `Snapshot`（空 ref）→ 找到 `window "…[NetMode: Standalone 0]…" [ref=wN]` → `Snapshot {"ref":"wN"}` 读子树里的 `button`/`textbox`。`Windows list` 同样会列 PIE 浮窗（**没列出来通常是 PIE 已经停了**，不是工具集不支持）。
+- 页面一换旧 ref 全废，每次动作前重新 Snapshot。
+- 验证用"读树判页"（树里有「请输入姓名」= 登录页，有「退出登录」= 模式选择页），不要只看 `Click` 的返回值。
 
-- **屏幕坐标 = 窗口原点 + 图像坐标**；窗口原点从 `xdotool getwindowgeometry --shell <win>` 现取，图像坐标从当次截图量（截图与客户区 1:1）。
-- **每次动作前重取几何、每次动作后截图复核**：PIE 浮窗会被重排/移动/改尺寸（实测 1272×692 ↔ 631×692、x 从 4 漂到 1923），复用上一张截图的坐标必然打空。**面板还会因内容变化上下浮动**（多一行少一行，整体平移十几像素）——坐标只能对"刚截的那张"有效。
-- **点前必须校验指针下的窗口**：`xdotool getmouselocation --shell | grep WINDOW` 必须等于 PIE 窗口 id；不等就拒绝点击并报错。**没有这道守卫时，误击别的窗口会被当成产品 bug**（实测一次误击 + 编辑器随后退出，差点判成"点选项导致崩溃"）。
-- **遮挡处理**：无 WM 的 Xwayland 上 `windowraise` 单独用常常无效，要**先把遮挡者压到底再抬自己**：`xdotool windowlower <遮挡窗口> && xdotool windowraise <PIE窗口>`，然后再校验一次指针窗口。遮挡者可能是别的应用（远程桌面/IM），且会**反复浮回来**——所以守卫要常驻，不能只在开头做一次。
+**兜底：系统级注入**——只用于 ref 够不着的地方（3D 视口内的世界坐标点击、拖到世界空间、相机拖拽）。按编辑器跑在哪套图形栈选工具链：
 
-输入：
+**原生 Wayland（Hyprland）**：`hyprctl` 几何/置顶 + `ydotool` 鼠标 + `wtype` 键盘 + `grim` 截图。
 
-- 键盘：先 `xdotool windowfocus <PIE窗口>` 把 X 输入焦点给它；`xdotool type` 可送中文（实测「王五」正常落进 UMG 输入框），即使窗口被遮挡也能送到（按键走焦点，不走指针）。
-- 拖拽：`mousemove → mousedown → 分步 mousemove（每步 sleep 30–50ms）→ mouseup`；步数 12–16，一次跳到终点 UMG 常常不认。
-- 点击：`mousemove → sleep 0.25 → mousedown → sleep 0.12 → mouseup`。按钮小（约 35×29px）时坐标差 20px 就落进"两个按钮之间的缝"——点击无反应**先怀疑坐标，别怀疑产品**。
+- 窗口几何：`hyprctl -j clients` 按标题匹配取 `at`/`size`。**每次都不同**（实测同一 PIE 浮窗出现过 1272×692 与 1272×1392，位置 (4,44) 与 (1284,744)）→ 一律现取，禁止硬编码。
+- **指针移动与点击必须来自同一设备**：移动走 compositor（`hl.dsp.cursor.move`）+ 点击走 uinput（ydotool）时，UE 把两者当不同 pointer，**隔次丢点击**（实测 3/6）；两个都走 ydotool 后 6/6。uinput 相对位移带 ~1.9x 指针加速，要循环纠偏到 ±1px。
+- 按键值：`ydotool click 0xC0` 左键单击；`0x40` 只按下、`0x80` 只抬起（拖拽用）；**`0x00` 是"什么都不做"**（man 里明说）。
+- 置顶/聚焦用 Lua dispatcher（Hyprland 0.55+ 起旧 `hyprctl dispatch windowraise` 语法已废）：`hyprctl -q eval '…hl.dsp.focus({window=w})…hl.dsp.window.bring_to_top({window=w})…'`；随后用 `hyprctl -j activewindow` 的 address 做"指针下窗口"守卫（`input:follow_mouse=1` 时光标下的窗口就是活动窗口）。
+- 键盘：`wtype`（虚拟键盘协议，支持中文）。截图：`grim -g "<x,y wxh>"`，抓的矩形与 `hyprctl` 的 `at`/`size` **逐像素一致**（和点击坐标同一套）。
+- **注入会污染 PIE 输入状态**：被注入过一轮之后，连 ref 点击都会退化成"返回 true 而无效果"，StopPIE/StartPIE 才复位。所以——能用 ref 就别注入；注入完还要接着做 UI 交互，先重启 PIE。
+- **Escape 会停掉 PIE**，别拿它当"关下拉"。
+
+**X11 / XWayland（旧路径）**：`xdotool`。窗口原点 `xdotool getwindowgeometry --shell <win>` 现取；点前用 `xdotool getmouselocation --shell | grep WINDOW` 校验指针窗口 == PIE 窗口（没有这道守卫时误击别的窗口会被误判成产品 bug）；无 WM 的 XWayland 上抬窗要先 `windowlower 遮挡者` 再 `windowraise PIE`（单独 raise 常无效），且遮挡者会反复浮回来，守卫要常驻；键盘先 `xdotool windowfocus`，`xdotool type` 可送中文。**xdotool 对原生 Wayland 客户端无效**（看不见窗口也点不到），Wayland 会话里别用。
+
+**坐标纪律（两套通用）**：屏幕坐标 = 窗口原点 + 图像坐标；窗口会被重排/改尺寸、面板还会因内容变化整体平移十几像素——**坐标只对"刚截的那张"有效**。按钮小（约 35×29px）时差 20px 就落进缝里：点击无反应**先怀疑坐标，别怀疑产品**。拖拽用 `mousemove → mousedown → 分步 mousemove（每步 sleep 30–50ms）→ mouseup`，步数 12–16，一次跳到终点 UMG 常常不认。
 
 诊断纪律（避免把渲染问题误判成数据问题，反之亦然）：
 
@@ -89,4 +100,4 @@
 
 ## 与浏览器 MCP 的同构性
 
-两个世界的正确姿势是同一个循环：**观察 → 一次一步行动 → 再观察**。把 UE 模拟点击理解为"没有 accessibility tree 的浏览器操作"——正因为缺了那棵树，才要用截图补观察、用降级路线保稳定。
+两个世界的正确姿势是同一个循环：**观察 → 一次一步行动 → 再观察**。浏览器有 accessibility tree 可依赖；UE 侧对应的东西是 Slate `Snapshot`——控件树与 ref 都拿得到（**PIE 游戏 UMG 也在内**），真正缺的是"值"：快照只有占位符，输入框里已经输入了什么只能靠截图目检。
