@@ -48,7 +48,7 @@
 - **PIE 游戏 UMG 拿得到 ref，`Click` 直接生效**（2026-09-14 UE 5.8 实测）：根 `Snapshot`（空 ref）会列出 PIE 浮窗，对它再 `Snapshot` 就能读到游戏按钮/输入框的 ref——干净会话里 3 轮往返 6/6（「本地」↔「退出登录」整页切换）。**返回值不可信**：`Click` 返回 true 也可能什么都没发生；可靠验证是**读控件树看当前页面变了没**（像素对比会被窗口尺寸变化污染）。
 - **ref 行带额外标注，解析要容错**：控件行常长这样 `button "退出登录" [focused] [pos=… size=…] [ref=…]`——只认"紧挨 `pos`"的正则会漏掉这类行（踩过：取 ref 静默返回空，现象看起来像"工具集点不动"）。`[disabled]` 的控件点不动，跳过。
 - **`Snapshot` 的参数是 `maxDepth`（camelCase，默认 30）**：写成 `max_depth` 会被静默忽略——别拿"树很浅/只有几层 image"下结论。
-- **`Click`/`Hover` 会真的挪动系统光标**：内部是 `GetWidgetScreenCenter` + `SetCursorPos`。点完看光标落到哪，可反推它算出的屏幕坐标（实测 Wayland 上确实会移）。
+- **`Click`/`Hover` 会真的挪动系统光标**：内部是 `GetWidgetScreenCenter` + `SetCursorPos`。点完看光标落到哪，可反推它算出的屏幕坐标（实测 Wayland 上确实会移）。它**不受下面"移动与点击必须同一设备"那条约束**——ref 路径的事件是引擎内部合成、不走 SDL/compositor，没有设备混用问题；`SetCursorPos` 只是把物理光标摆到控件上，让 hover 与命中状态一致。两个后果：① 之后若改用系统级注入，别假设光标还在原处，用 `hyprctl cursorpos` 现取再纠偏；② 反向不成立——注入留下的状态污染会让 ref 路径失灵，所以"先 ref、必要时才注入"的顺序不能倒过来用。
 - **Type 是追加不是替换**：逐字符键事件直接追加到现有内容。改值前必须 `Click` 输入框（先聚焦）→ `PressKey Ctrl+A` → 再 `Type`；漏掉聚焦那步，`Ctrl+A` 落空、新值直接拼在后面（实测拼出 `TestUserAbc`）。
 - **下拉选择工具打不开 PIE 内 ComboBox**（返回 false）：改走键盘——`Click` 聚焦 → `Down` 打开列表 → `Up`/`Down` 移动高亮 → `Enter` 提交。方向键语义是"移动高亮项"而非"展开"，且起始位置随当前选中项变化，**每按一步截图确认高亮再动手**。
 - **引用（ref）跨页面切换全部失效**：登录页→模式页这类整体换树之后必须重新 Snapshot；同一页面内布局变化（如下拉展开导致后续控件位移）会让旧 ref 的位置作废但 ref 本身仍可用。

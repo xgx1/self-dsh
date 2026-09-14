@@ -32,7 +32,7 @@ description: "在运行中的虚幻编辑器里通过 MCP 操作时的决策与�
 
 1. **有确定性工具吗？** → `describe_toolset` 查相关 toolset（actors / blueprints / materials / …），有就直接 `call_tool`。90% 的"我想在编辑器里点一下"到这一步就终结了。
 2. **console / Python 能到吗？** → 找名字含 Console / Python 的工具：console 命令（开关功能、Cheat Manager）或 `unreal.*` Python。比模拟点击稳定一个数量级。
-3. **是 PIE 内交互吗？** → **游戏 UMG 就在 Slate 树里**（UE 5.8 实测）：根 `Snapshot` 会列出 PIE 浮窗，对它再 `Snapshot` 就能读到游戏按钮/输入框的 ref，`Click`/`Type`/`PressKey` 直接生效（干净会话 3 轮往返 6/6）。**先走这条，不要一上来就用坐标。** 只有 ref 够不着的场景（3D 视口内的世界坐标点击、拖到世界空间）才降到系统级注入；而注入会**污染 PIE 输入状态**——实测被注入过一轮后，连 ref 点击都变成"返回 true 但页面不动"，必须 StopPIE/StartPIE 才复位。工具链、守卫与踩坑见 `references/ue-simulation-decisions.md`「PIE 内交互」。
+3. **是 PIE 内交互吗？** → **游戏 UMG 就在 Slate 树里**（UE 5.8 实测）：根 `Snapshot` 会列出 PIE 浮窗，对它再 `Snapshot` 就能读到游戏按钮/输入框的 ref，`Click`/`Type`/`PressKey` 直接生效（干净会话 3 轮往返 6/6）。**先走这条，不要一上来就用坐标。** 只有 ref 够不着的场景（3D 视口内的世界坐标点击、拖到世界空间）才降到系统级注入；而注入会**污染 PIE 输入状态**——实测被注入过一轮后，连 ref 点击都变成"返回 true 但页面不动"，必须 StopPIE/StartPIE 才复位。工具链（Wayland：hyprctl 取几何/置顶 + **ydotool 管鼠标移动和点击两件事，不能只用它点击** + wtype 键盘 + grim 截图）、守卫与踩坑见 `references/ue-simulation-decisions.md`「PIE 内交互」。
    （旧结论「游戏 UMG 不在无障碍树里、Click 不触发 OnClicked」已作废：那是用根 ref/视口 image 取样加上被污染的会话得出的。）
 4. **只剩 UI 路径了吗？** → 模拟点击编辑器 UI。最后手段，按下面五步走。
 
@@ -80,7 +80,7 @@ description: "在运行中的虚幻编辑器里通过 MCP 操作时的决策与�
 | UE 调用挂住 | 是否在编译/加载/PIE；等结束或先停 PIE |
 | 点了没反应 | **先怀疑坐标**（有没有落在两个控件之间的缝里、面板是否因内容变化平移了）；再重新截图确认界面状态与焦点窗口；仍不行降级到确定性路线 |
 | 点击后编辑器退出/崩溃 | **先查有没有点到别的窗口**（指针下窗口校验）；再看 `Engine exit requested` 出现在点击之前还是之后；退出清理期的 WorldPartition 断言是引擎噪声，不是玩法崩溃 |
-| PIE 里点不到游戏按钮 | ① ref 解析要容错（控件行还带 `[focused]`/`[disabled]` 等标注，只认紧挨 `pos` 的正则会漏）；② 页面切换后旧 ref 全失效 → 重新 `Snapshot`；③ `Click` 返回 true ≠ 生效，用**读控件树判当前页面**来验证，别只看返回值；④ 本轮做过系统级注入就 StopPIE/StartPIE 复位；⑤ 仍不行才降系统级注入（Wayland：hyprctl 几何/置顶 + ydotool 点击 + wtype 键盘 + grim 截图，且**移动与点击必须同一设备**） |
+| PIE 里点不到游戏按钮 | ① ref 解析要容错（控件行还带 `[focused]`/`[disabled]` 等标注，只认紧挨 `pos` 的正则会漏）；② 页面切换后旧 ref 全失效 → 重新 `Snapshot`；③ `Click` 返回 true ≠ 生效，用**读控件树判当前页面**来验证，别只看返回值；④ 本轮做过系统级注入就 StopPIE/StartPIE 复位；⑤ 仍不行才降系统级注入（Wayland：hyprctl 取几何/置顶 + **ydotool 同时管移动与点击** + wtype 键盘 + grim 截图） |
 | 源码改了但行为没变 | 构建可能没真正生效：查产物时间戳 vs 源码；UBT 报 `Target is up to date` 却源码更新 → `touch` 源文件，仍不重链就删模块产物强制链接（`unreal-official-mcp-surgery` 的编译纪律节） |
 
 ## 维护提示
