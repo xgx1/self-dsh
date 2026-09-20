@@ -73,6 +73,9 @@ DSH 是微内核 + Cordis 插件树：一切功能都是挂在文档化扩展点
 
 ## 常见坑
 
+- **新增插件包必须走完五件套**（漏一步 = preset 起不来；`omni` 是默认 preset）：① 包内 `tsconfig.json`（extends 根 `tsconfig.base.json`、`rootDir: src`、`outDir: lib/types`、`references` 声明 workspace 依赖）→ ② 根 `tsconfig.host.json` 的 `references` 加引用 → ③ `pnpm run gen-tsconfig-paths` 重生成 `tsconfig.base.json` 的包别名 → ④ `apps/cli/package.json` 加依赖 + `pnpm install` → ⑤ 全量 `pnpm run build:lib:host` 通过且该包测试通过。**preset 引用了未构建好的包 = 所有用该 preset 的新会话起不来**
+- **包装 provider 时，候选技能上的 `provider` 必须等于外层注册名**：别让内层 provider 顶着旧名字返回数据，名字不匹配会解析到错误的 provider
+- **别删 `packages/llm/llm/src/index.ts` 里的 `assertNever` 兼容导出**（L54-57 的注释写明了保留条件）：外部 turtle-ui TUI 还在从这个包 import，删掉再重建 `dsh tui` 的 import 必挂；等 turtle-ui 迁完再删
 - 动态插件是进程内扩展：重启即失；要持久必须落到预设/安装插件形态
 - **扩展现成功能 ≠ 改官方源码**：优先独立包/补丁形式覆盖，官方源码改动目标为 0（web-dsh-web-extension 即纯 profile-bundle 覆盖层）
 - **禁止编辑部署自带的 preset 安装目录**；要改 shipped 预设就复制一份到 `~/.dsh/.agent-presets/` 改副本
