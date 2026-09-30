@@ -18,7 +18,7 @@ DSH 是微内核 + Cordis 插件树：一切功能都是挂在文档化扩展点
 | 动态 Cordis 插件 | `cordis_define`/`cordis_run`，会话内 | 当前进程，重启即失 | 临时功能、原型试水、一次性界面 |
 | Agent 预设 / 宿主组合 | `~/.dsh/.agent-presets/<id>/cordis.yml` | 持久 | 改会话工具集/人设/模型路由 |
 | 技能 | `~/.dsh/skills/<名字>/SKILL.md` | 持久 | 教 agent「怎么做」（本技能即此形态） |
-| 持久安装插件（独立 npm 包） | 独立包：`exports ./client` + `dsh.client` manifest + `dsh.bundle.patch`（cordis.patch.yml insert 行）；`dsh plugin --profile web add link:<目录>` 本地安装（aionui-panel、web-dsh-web-extension 先例） | 持久跨会话 | 正式功能、Web GUI 扩展 |
+| 持久安装插件（独立 npm 包） | 独立包：`exports ./client` + `dsh.client` manifest + `dsh.bundle.patch`（cordis.patch.yml insert 行）；`dsh plugin --profile web add link:<目录>` 本地安装（本机先例：`dsh-extensions/plugins/` 下的 `dsh-task-manager`、`dsh-sidebar-taskbar`） | 持久跨会话 | 正式功能、Web GUI 扩展 |
 | MCP 工具 | 组合里挂 mcp 行 | 持久 | 接入外部工具生态 |
 
 权威资料（以当前仓库证据为准，不靠记忆）：
@@ -77,7 +77,7 @@ DSH 是微内核 + Cordis 插件树：一切功能都是挂在文档化扩展点
 - **包装 provider 时，候选技能上的 `provider` 必须等于外层注册名**：别让内层 provider 顶着旧名字返回数据，名字不匹配会解析到错误的 provider
 - **别删 `packages/llm/llm/src/index.ts` 里的 `assertNever` 兼容导出**（L54-57 的注释写明了保留条件）：外部 turtle-ui TUI 还在从这个包 import，删掉再重建 `dsh tui` 的 import 必挂；等 turtle-ui 迁完再删
 - 动态插件是进程内扩展：重启即失；要持久必须落到预设/安装插件形态
-- **扩展现成功能 ≠ 改官方源码**：优先独立包/补丁形式覆盖，官方源码改动目标为 0（web-dsh-web-extension 即纯 profile-bundle 覆盖层）
+- **扩展现成功能 ≠ 改官方源码**：优先独立包/补丁形式覆盖，官方源码改动目标为 0（本机 `dsh-task-manager` 即纯 profile-bundle 覆盖层）
 - **禁止编辑部署自带的 preset 安装目录**；要改 shipped 预设就复制一份到 `~/.dsh/.agent-presets/` 改副本
 - 插件代码是纯 JS：无 TypeScript/JSX/import；Client 端用 `React.createElement`；先用 `cordis_inspect_*` 查准 API 再写
 - Inspect 查询结果只用于确认能力/签名，不能当业务数据缓存或展示；运行时只调真实 Service
