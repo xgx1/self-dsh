@@ -1,23 +1,28 @@
 ---
 name: write-manual-test-doc
-description: 'Create manual test documentation for QA/developers. Triggers: "写测试文档", "人工测试文档", "QA测试指南". Produces Obsidian doc: test features, procedures, expected results.'
+description: '编写/更新人工测试文档（QA 指南）：新建时列测试功能清单、流程、预期结果；bug 修复后更新修复清单与重新测试清单。Triggers: "写测试文档", "人工测试文档", "QA测试指南", 更新测试文档, 更新QA文档.'
 ---
 
-# Write Manual Test Doc
+# Write / Update Manual Test Doc
 
-编写人工测试文档，告知开发者测试范围和流程。
+给开发者/QA 写人工测试文档；bug 修复后同步更新。两种场景共用 `dev-docs` 排版规范。
 
-## 流程
-
-### Step 1: 加载文档规范
+## Step 1: 加载文档规范
 加载 `dev-docs`（Docs/ 排版与结构规范）。
 
-### Step 2: 编写测试文档
-文档内容必须包含：
+## 场景 A：新建测试文档
+内容必须包含：
 - **测试功能清单** — 有哪些功能需要人工测试
 - **测试流程** — 每个功能的操作步骤（按顺序）
 - **预期结果** — 每一步应该看到什么
 - **注意事项** — 前置条件、环境要求、已知限制
 
+## 场景 B：bug 修复后更新
+文档更新内容必须包含：
+- **修复清单** — 修复了哪些问题
+- **重新测试清单** — 需要重新测试哪些功能
+- **变更的测试流程** — 哪些测试步骤发生了变化
+- **新的预期结果** — 修复后的正确行为
+
 ## 出口
-人工测试文档已生成，开发者可按文档执行测试。
+人工测试文档已生成/更新，开发者可按最新文档执行测试。
