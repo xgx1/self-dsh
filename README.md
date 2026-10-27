@@ -35,6 +35,7 @@ DSH 技能分组仓：**self-dsh**
 - `solidify-feature-lessons`
 - `summarize-feature-work`
 - `tdd-test-feature`
+- `tdd-fanout`
 - `tdd-write-feature`
 - `unreal-editor-mcp-ops`
 - `update-manual-test-doc`
