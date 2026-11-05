@@ -8,7 +8,7 @@
 
 - 用户说「编辑器自动化」「MCP 改编辑器」「模拟点击」「模拟操作」「Remote Control」「Pixel Streaming」「编辑器 UI 验证」
 - 要在运行中的 UE 编辑器里改资产/蓝图/材质/关卡，或要验证编辑器 UI 本身
-- 工具级清单见 `unreal-mcp` 主技能、浏览器侧纪律见 `browser-mcp-playwright`——本技能只管**判断与顺序**
+- 工具级清单见 `unreal-mcp` 主技能、网页侧直接用 ego-browser（`ego_*` 工具，Playwright MCP 已卸载）——本技能只管**判断与顺序**
 
 ## 怎么用
 
@@ -21,7 +21,7 @@
 | 编辑器里没有 API 暴露、只能走 UI 的工作流 | 模拟点击（最后手段） |
 | 验证编辑器 UI 本身（面板、菜单、按钮响应） | 模拟点击 + 截图对比（正当用途） |
 | PIE 内游戏交互（点游戏内按钮、填输入框） | **Slate ref 路径**：对 PIE 窗口树 `Snapshot` → 按 ref `Click`/`Type`/`PressKey`（实测干净会话 6/6） |
-| 网页相关（打开页面、抓数、看接口） | 交给 `browser-mcp-playwright` |
+| 网页相关（打开页面、抓数、看接口） | ego-browser：`ego_navigate` → `ego_snapshot` → `ego_click` |
 
 决策树：① `describe_toolset` 查相关 toolset（actors / blueprints / materials…），有就 `call_tool` → ② 找名字含 Console / Python 的工具（console 命令或 `unreal.*` Python）→ ③ PIE 内交互走 ref → ④ 只剩 UI 路径才模拟点击。
 

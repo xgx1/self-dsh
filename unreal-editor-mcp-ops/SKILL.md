@@ -7,7 +7,7 @@ description: "在运行中的虚幻编辑器里通过 MCP 操作时的决策与�
 
 > **平台约定**：本机主力环境是 Linux（Arch）——命令以 bash 为先、可直接执行；Windows 专属步骤一律收进「Windows（PowerShell）」小节。
 
-这层回答的是「该不该点、按什么顺序点」，不是「有哪些工具」：工具级说明见 `unreal-mcp` 主技能，参数级细节见 `references/ue-simulation-decisions.md`，浏览器侧纪律见 `browser-mcp-playwright`。
+这层回答的是「该不该点、按什么顺序点」，不是「有哪些工具」：工具级说明见 `unreal-mcp` 主技能，参数级细节见 `references/ue-simulation-decisions.md`，网页侧直接用 ego-browser（`ego_*` 工具；Playwright MCP 已于 2026-11-05 从设备与配置中卸载）。
 
 ## 一、选哪条路：任务 → 能力决策表
 
@@ -18,7 +18,7 @@ description: "在运行中的虚幻编辑器里通过 MCP 操作时的决策与�
 | 编辑器里没有 API 暴露、只能走 UI 的工作流 | 模拟点击（最后手段，见决策树） |
 | 验证编辑器 UI 本身（面板、菜单、按钮响应） | 模拟点击 + 截图对比（这就是正当用途） |
 | PIE 内的游戏交互（点游戏内按钮、填输入框） | **Slate ref 路径**：对 PIE 窗口树 `Snapshot` → 按 ref `Click`/`Type`/`PressKey`（实测干净会话 6/6）。只有 3D 视口世界坐标/世界空间拖拽才降到系统级注入 |
-| 网页相关（打开页面、抓数、看接口） | 交给 `browser-mcp-playwright` |
+| 网页相关（打开页面、抓数、看接口） | ego-browser：`ego_navigate` → `ego_snapshot` → `ego_click` |
 
 一句话：**改编辑器内容走确定性 API；只有"必须经过 UI 的人肉路径"或"UI 本身是被测对象"才模拟点击。**
 
@@ -68,7 +68,7 @@ description: "在运行中的虚幻编辑器里通过 MCP 操作时的决策与�
 
 ## 五、环境与配置速查
 
-- DSH web：`~/.dsh/profiles/web/cordis.patch.yml` 已注册 `mcp-ue`（改完需重启 dsh web）；浏览器侧注册片段见 `browser-mcp-playwright` 的 `references/setup-mcp.md`。
+- DSH web：`~/.dsh/profiles/web/cordis.patch.yml` 已注册 `mcp-ue`（改完需重启 dsh web）；网页侧不需要额外注册，走 ego-browser 即可。
 - Claude Code / 项目：UE 官方 `ModelContextProtocol.GenerateClientConfig` 会写 `.mcp.json`。
 - UE MCP 服务启动：编辑器 console 执行 `ModelContextProtocol.StartServer`，HTTP `127.0.0.1:8000/mcp`，需 `Mcp-Session-Id` 头 + `notifications/initialized`。
 
